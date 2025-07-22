@@ -1,7 +1,6 @@
 package id3parser
 
 import (
-	"encoding/binary"
 	"errors"
 	"log"
 	"os"
@@ -26,9 +25,24 @@ func TestParseTagHeader(t *testing.T) {
 	defer tearDownParseTagHeader()
 
 	t.Run("invalid identifier", func(t *testing.T) {
-		if _, err := Parse(invalidTagHeaderIdentifierMP3); !errors.Is(err, ErrInvalidTagHeaderIdentifier) {
-			t.Errorf("got: %v, expect: %v\n", err, ErrInvalidTagHeaderIdentifier)
-		}
+		album, err := Parse(invalidTagHeaderIdentifierMP3)
+		assertAlbum(t, album, Album{})
+		assertErr(t, err, ErrInvalidTagHeaderIdentifier)
+	})
+	t.Run("invalid version", func(t *testing.T) {
+		album, err := Parse(invalidTagHeaderVersionMP3)
+		assertAlbum(t, album, Album{})
+		assertErr(t, err, ErrInvalidTagHeaderVersion)
+	})
+	t.Run("invalid flags", func(t *testing.T) {
+		album, err := Parse(invalidTagHeaderFlagsMP3)
+		assertAlbum(t, album, Album{})
+		assertErr(t, err, ErrInvalidTagHeaderflags)
+	})
+	t.Run("invalid size", func(t *testing.T) {
+		album, err := Parse(invalidTagHeaderSizeMp3)
+		assertAlbum(t, album, Album{})
+		assertErr(t, err, ErrInvalidTagHeaderSize)
 	})
 }
 
@@ -37,25 +51,28 @@ func setupTestParseTagHeader() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	identifier := make([]byte, 3)
-	version := make([]byte, 2)
-	flags := make([]byte, 1)
-	size := make([]byte, 4)
-	copy(identifier, []byte{'I', 'D', '2'})                                                // should be ID3
-	copy(version, []byte{0, 2})                                                            // only accept id2.3 or id2.4
-	copy(flags, []byte{flags[0] + 1 + 1<<1 + 1<<2 + 1<<3 + 1<<4})                          // %abc00000
-	binary.BigEndian.PutUint32(size, binary.BigEndian.Uint32(size)+1<<7+1<<15+1<<23+1<<31) // By id2.3 definition, every byte's first bit should always be 0, so the max tag size would be 256mb
-	if err = os.WriteFile(invalidTagHeaderIdentifierMP3, append(identifier, stream[3:]...), 0644); err != nil {
-		log.Fatal(err)
+	createStream := func(origin_stream []byte, start, end int, segment []byte) []byte {
+		result := make([]byte, len(origin_stream))
+		copy(result[:start], origin_stream[:start])
+		copy(result[start:end], segment)
+		copy(result[end:], origin_stream[end:])
+		return result
 	}
-	if err = os.WriteFile(invalidTagHeaderVersionMP3, append(append(stream[0:3], version...), stream[5:]...), 0644); err != nil {
-		log.Fatal(err)
+	invalidIdentifier := []byte{'I', 'D', '2'}                            // should be ID3
+	invalidVersion := []byte{0b00000010, 0b00000000}                      // only accept id3v2.3 and id3v2.4
+	invalidFlags := []byte{0b00011111}                                    // %abc00000
+	invalidSize := []byte{0b10000000, 0b10000000, 0b10000000, 0b10000000} // By id2.3 definition, every byte's first bit should always be 0, so the max tag size would be 256mb
+	if err = os.WriteFile(invalidTagHeaderIdentifierMP3, createStream(stream, 0, 3, invalidIdentifier), 0644); err != nil {
+		log.Println(err)
 	}
-	if err = os.WriteFile(invalidTagHeaderFlagsMP3, append(append(stream[0:5], flags...), stream[6:]...), 0644); err != nil {
-		log.Fatal(err)
+	if err = os.WriteFile(invalidTagHeaderVersionMP3, createStream(stream, 3, 5, invalidVersion), 0644); err != nil {
+		log.Println(err)
 	}
-	if err = os.WriteFile(invalidTagHeaderSizeMp3, append(append(stream[0:6], size...), stream[10:]...), 0644); err != nil {
-		log.Fatal(err)
+	if err = os.WriteFile(invalidTagHeaderFlagsMP3, createStream(stream, 5, 6, invalidFlags), 0644); err != nil {
+		log.Println(err)
+	}
+	if err = os.WriteFile(invalidTagHeaderSizeMp3, createStream(stream, 6, 10, invalidSize), 0644); err != nil {
+		log.Println(err)
 	}
 }
 
@@ -68,5 +85,19 @@ func tearDownParseTagHeader() {
 		if err := os.Remove(file); err != nil {
 			log.Fatal(err)
 		}
+	}
+}
+
+func assertErr(t *testing.T, got, expect error) {
+	t.Helper()
+	if !errors.Is(got, expect) {
+		t.Errorf("got: %v, expect: %v\n", got, expect)
+	}
+}
+
+func assertAlbum(t *testing.T, got, expect Album) {
+	t.Helper()
+	if got != expect {
+		t.Errorf("got: %v, expect: %v\n", got, expect)
 	}
 }
