@@ -1,11 +1,11 @@
 package id3parser
 
 import (
-	"errors"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
+	"github.com/stretchr/testify/assert"
 )
 
 const (
@@ -26,23 +26,23 @@ func TestParseTagHeader(t *testing.T) {
 
 	t.Run("invalid identifier", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderIdentifierMP3)
-		assertAlbum(t, album, Album{})
-		assertErr(t, err, ErrInvalidTagHeaderIdentifier)
+		assert.Equal(t, album, Album{})
+		assert.EqualError(t, err, ErrInvalidTagHeaderIdentifier.Error())
 	})
 	t.Run("invalid version", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderVersionMP3)
-		assertAlbum(t, album, Album{})
-		assertErr(t, err, ErrInvalidTagHeaderVersion)
+		assert.Equal(t, album, Album{})
+		assert.EqualError(t, err, ErrInvalidTagHeaderVersion.Error())
 	})
 	t.Run("invalid flags", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderFlagsMP3)
-		assertAlbum(t, album, Album{})
-		assertErr(t, err, ErrInvalidTagHeaderflags)
+		assert.Equal(t, album, Album{})
+		assert.EqualError(t, err, ErrInvalidTagHeaderflags.Error())
 	})
 	t.Run("invalid size", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderSizeMp3)
-		assertAlbum(t, album, Album{})
-		assertErr(t, err, ErrInvalidTagHeaderSize)
+		assert.Equal(t, album, Album{})
+		assert.EqualError(t, err, ErrInvalidTagHeaderSize.Error())
 	})
 }
 
@@ -85,19 +85,5 @@ func tearDownParseTagHeader() {
 		if err := os.Remove(file); err != nil {
 			log.Fatal(err)
 		}
-	}
-}
-
-func assertErr(t *testing.T, got, expect error) {
-	t.Helper()
-	if !errors.Is(got, expect) {
-		t.Errorf("got: %v, expect: %v\n", got, expect)
-	}
-}
-
-func assertAlbum(t *testing.T, got, expect Album) {
-	t.Helper()
-	if got != expect {
-		t.Errorf("got: %v, expect: %v\n", got, expect)
 	}
 }
