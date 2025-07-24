@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"bytes"
+	"image/png"
 )
 
 const (
@@ -19,9 +21,9 @@ const (
 	invalidTagHeaderSizeMp3       string = "invalid-tag-header-size.mp3"
 )
 
-func TestParseTagHeader(t *testing.T) {
-	setupTestParseTagHeader()
-	defer tearDownParseTagHeader()
+func TestParse(t *testing.T) {
+	setupTestParse()
+	defer tearDownTestParse()
 
 	t.Run("invalid identifier", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderIdentifierMP3)
@@ -43,9 +45,7 @@ func TestParseTagHeader(t *testing.T) {
 		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderSize.Error())
 	})
-}
 
-func TestParse(t *testing.T) {
 	t.Run("get album author", func(t *testing.T) {
 		album, err := Parse(NoAlbumCoverMP3)
 		assert.Equal(t, ExpectedAuthor, album.author)
@@ -56,9 +56,17 @@ func TestParse(t *testing.T) {
 		assert.Equal(t, ExpectedTitle, album.title)
 		assert.NoError(t, err)
 	})
+	t.Run("get embeded cover", func(t *testing.T) {
+		album, err := Parse(EmbededAlbumCoverMP3)
+		got := &bytes.Buffer{}
+		png.Encode(got, album.cover)
+		expected, _ := os.ReadFile("../static/embeded-cover.png")
+		assert.Equal(t, expected, got.Bytes())
+		assert.NoError(t, err)
+	})
 }
 
-func setupTestParseTagHeader() {
+func setupTestParse() {
 	stream, err := os.ReadFile(NoAlbumCoverMP3)
 	if err != nil {
 		log.Fatal(err)
@@ -88,7 +96,7 @@ func setupTestParseTagHeader() {
 	}
 }
 
-func tearDownParseTagHeader() {
+func tearDownTestParse() {
 	files, err := filepath.Glob("invalid-tag-header*.mp3")
 	if err != nil {
 		log.Fatal(err)

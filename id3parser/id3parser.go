@@ -1,10 +1,12 @@
 package id3parser
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"image"
 	"log"
+	_ "image/jpeg"
 	"os"
 )
 
@@ -90,8 +92,7 @@ func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
 	case "TPE1":
 		album.author = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
 	case "APIC":
-		// image/jpeg image/png
-		album.cover = extractCover()
+		album.cover = extractCover(*advanceBytes, frameSize)
 	}
 	*advanceBytes += frameSize
 }
@@ -100,6 +101,32 @@ func getFrameContent(s string) string {
 	return s[1 : len(s)-1] // frame content contain encoding leading byte and null terminator byte
 }
 
-func extractCover() image.Image {
-	return nil
+/*
+Text encoding   $xx
+MIME type       <text string> $00
+Picture type    $xx
+Description     <text string according to encoding> $00 (00)
+Picture data    <binary data>
+*/
+func extractCover(advanceBytes, frameSize uint32) image.Image {
+	var (
+		start int = int(advanceBytes)
+		next  int
+	)
+	start += 1 // ignore encode byte
+	if next = bytes.IndexByte(fileStream[start:], byte(0)); next == -1 {
+		log.Fatal("invalid image content in apic")
+	}
+	start += next + 1
+	start += 1 // ignore image type
+	if next = bytes.IndexByte(fileStream[start:], byte(0)); next == -1 {
+		log.Fatal("invalid image content in apic")
+	}
+	start += next + 1
+	imageBytes := fileStream[start : advanceBytes+frameSize]
+	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	if err != nil {
+		log.Fatal("invalid binary content in apic:", err)
+	}
+	return img
 }
