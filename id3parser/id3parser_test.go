@@ -1,19 +1,18 @@
 package id3parser
 
 import (
+	"github.com/stretchr/testify/assert"
 	"log"
 	"os"
 	"path/filepath"
 	"testing"
-	"github.com/stretchr/testify/assert"
 )
 
 const (
 	NoAlbumCoverMP3               string = "../static/no-embeded-album-cover-demo.mp3"
 	EmbededAlbumCoverMP3          string = "../static/embeded-album-cover-demo.mp3"
-	urlAlbumCoverMP3              string = "../static/url-album-cover-demo.mp3"
 	ExpectedAuthor                string = "Soft Tags"
-	ExpectedTitle                 string = "They_Live_By_Night"
+	ExpectedTitle                 string = "They Live By Night"
 	invalidTagHeaderIdentifierMP3 string = "invalid-tag-header-identifier.mp3"
 	invalidTagHeaderVersionMP3    string = "invalid-tag-header-version.mp3"
 	invalidTagHeaderFlagsMP3      string = "invalid-tag-header-flags.mp3"
@@ -26,23 +25,36 @@ func TestParseTagHeader(t *testing.T) {
 
 	t.Run("invalid identifier", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderIdentifierMP3)
-		assert.Equal(t, album, Album{})
+		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderIdentifier.Error())
 	})
 	t.Run("invalid version", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderVersionMP3)
-		assert.Equal(t, album, Album{})
+		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderVersion.Error())
 	})
 	t.Run("invalid flags", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderFlagsMP3)
-		assert.Equal(t, album, Album{})
+		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderflags.Error())
 	})
 	t.Run("invalid size", func(t *testing.T) {
 		album, err := Parse(invalidTagHeaderSizeMp3)
-		assert.Equal(t, album, Album{})
+		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderSize.Error())
+	})
+}
+
+func TestParse(t *testing.T) {
+	t.Run("get album author", func(t *testing.T) {
+		album, err := Parse(NoAlbumCoverMP3)
+		assert.Equal(t, ExpectedAuthor, album.author)
+		assert.NoError(t, err)
+	})
+	t.Run("get album title", func(t *testing.T) {
+		album, err := Parse(NoAlbumCoverMP3)
+		assert.Equal(t, ExpectedTitle, album.title)
+		assert.NoError(t, err)
 	})
 }
 

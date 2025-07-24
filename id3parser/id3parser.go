@@ -8,6 +8,8 @@ import (
 	"os"
 )
 
+var fileStream []byte
+
 var (
 	ErrInvalidTagHeaderIdentifier = errors.New("tag header: invalid identifier")
 	ErrInvalidTagHeaderVersion    = errors.New("tag header: invalid version")
@@ -22,34 +24,82 @@ type Album struct {
 }
 
 func Parse(path string) (Album, error) {
-	stream, err := os.ReadFile(path)
-	if err != nil {
+	var (
+		advanceBytes uint32
+		album        Album
+		err          error
+		stop         bool
+	)
+	if fileStream, err = os.ReadFile(path); err != nil {
 		log.Fatal(err)
 	}
-	if err := checkValidTagHeader(stream[:10]); err != nil {
+	if err := checkValidTagHeader(&advanceBytes); err != nil {
 		return Album{}, err
 	}
-	return Album{}, nil
+	extendedHeaderExist := (uint8(fileStream[5]) & 0b01000000) > 1
+	if extendedHeaderExist {
+		advanceExtendedHeader(&advanceBytes)
+	}
+	for !stop {
+		advanceFrame(&advanceBytes, &album, &stop)
+	}
+	return album, nil
 }
 
-func checkValidTagHeader(h []byte) error {
-	if identifier := string(h[:3]); identifier != "ID3" {
+func checkValidTagHeader(advanceBytes *uint32) error {
+	if identifier := string(fileStream[:3]); identifier != "ID3" {
 		return ErrInvalidTagHeaderIdentifier
 	}
-	if version := binary.LittleEndian.Uint16(h[3:5]); version != 3 && version != 4 {
+	if version := binary.LittleEndian.Uint16(fileStream[3:5]); version != 3 && version != 4 {
 		return ErrInvalidTagHeaderVersion
 	}
-	flags := uint8(h[5])
+	flags := uint8(fileStream[5])
 	for i := range 5 {
 		if (flags>>i)&1 > 0 {
 			return ErrInvalidTagHeaderflags
 		}
 	}
-	size := binary.BigEndian.Uint32(h[6:10])
+	size := binary.BigEndian.Uint32(fileStream[6:10])
 	for i := 1; i < 5; i++ {
 		if size>>(i*8-1)&1 > 0 {
 			return ErrInvalidTagHeaderSize
 		}
 	}
+	*advanceBytes += 10
+	return nil
+}
+
+func advanceExtendedHeader(advanceBytes *uint32) {
+	extendedHeaderSize := binary.BigEndian.Uint32(fileStream[10:14])
+	*advanceBytes += 4
+	*advanceBytes += extendedHeaderSize
+}
+
+func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
+	frameID := string(fileStream[*advanceBytes : *advanceBytes+4])
+	if frameID == "\x00\x00\x00\x00" { // indicating that we have looped over all the frames
+		*stop = true
+	}
+	*advanceBytes += 4
+	frameSize := binary.BigEndian.Uint32(fileStream[*advanceBytes : *advanceBytes+4])
+	*advanceBytes += 4
+	*advanceBytes += 2 // flags
+	switch frameID {
+	case "TIT2":
+		album.title = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
+	case "TPE1":
+		album.author = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
+	case "APIC":
+		// image/jpeg image/png
+		album.cover = extractCover()
+	}
+	*advanceBytes += frameSize
+}
+
+func getFrameContent(s string) string {
+	return s[1 : len(s)-1] // frame content contain encoding leading byte and null terminator byte
+}
+
+func extractCover() image.Image {
 	return nil
 }
