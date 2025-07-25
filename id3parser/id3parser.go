@@ -2,12 +2,12 @@ package id3parser
 
 import (
 	"bytes"
+	_ "image/png"
 	"encoding/binary"
+	"github.com/gorgemul/musicplayer/static"
 	"errors"
 	"image"
 	"log"
-	_ "image/jpeg"
-	"os"
 )
 
 var fileStream []byte
@@ -20,21 +20,19 @@ var (
 )
 
 type Album struct {
-	author string
-	title  string
-	cover  image.Image // if no image found in meta data, use defulat image
+	Artist string
+	Title  string
+	Cover  image.Image // if no image found in meta data, use defulat image
 }
 
-func Parse(path string) (Album, error) {
+func Parse(data []byte) (Album, error) {
+	fileStream = data
 	var (
 		advanceBytes uint32
 		album        Album
 		err          error
 		stop         bool
 	)
-	if fileStream, err = os.ReadFile(path); err != nil {
-		log.Fatal(err)
-	}
 	if err := checkValidTagHeader(&advanceBytes); err != nil {
 		return Album{}, err
 	}
@@ -44,6 +42,18 @@ func Parse(path string) (Album, error) {
 	}
 	for !stop {
 		advanceFrame(&advanceBytes, &album, &stop)
+	}
+	if album.Cover == nil {
+		album.Cover, _, err = image.Decode(bytes.NewReader(static.DefaultCoverBytes))
+		if err != nil {
+			log.Fatal("default image should be correctly open:", err)
+		}
+	}
+	if album.Artist == "" {
+		album.Artist = "Unknown Artist"
+	}
+	if album.Title == "" {
+		album.Title = "Unknown Title"
 	}
 	return album, nil
 }
@@ -81,6 +91,7 @@ func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
 	frameID := string(fileStream[*advanceBytes : *advanceBytes+4])
 	if frameID == "\x00\x00\x00\x00" { // indicating that we have looped over all the frames
 		*stop = true
+		return
 	}
 	*advanceBytes += 4
 	frameSize := binary.BigEndian.Uint32(fileStream[*advanceBytes : *advanceBytes+4])
@@ -88,11 +99,11 @@ func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
 	*advanceBytes += 2 // flags
 	switch frameID {
 	case "TIT2":
-		album.title = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
+		album.Title = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
 	case "TPE1":
-		album.author = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
+		album.Artist = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
 	case "APIC":
-		album.cover = extractCover(*advanceBytes, frameSize)
+		album.Cover = extractCover(*advanceBytes, frameSize)
 	}
 	*advanceBytes += frameSize
 }
@@ -124,9 +135,9 @@ func extractCover(advanceBytes, frameSize uint32) image.Image {
 	}
 	start += next + 1
 	imageBytes := fileStream[start : advanceBytes+frameSize]
-	img, _, err := image.Decode(bytes.NewReader(imageBytes))
+	image, _, err := image.Decode(bytes.NewReader(imageBytes))
 	if err != nil {
 		log.Fatal("invalid binary content in apic:", err)
 	}
-	return img
+	return image
 }
