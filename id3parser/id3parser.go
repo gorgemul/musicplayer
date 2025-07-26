@@ -2,11 +2,11 @@ package id3parser
 
 import (
 	"bytes"
-	_ "image/png"
 	"encoding/binary"
-	"github.com/gorgemul/musicplayer/static"
 	"errors"
+	"github.com/gorgemul/musicplayer/static"
 	"image"
+	_ "image/png"
 	"log"
 )
 

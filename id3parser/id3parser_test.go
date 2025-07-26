@@ -2,8 +2,8 @@ package id3parser
 
 import (
 	"bytes"
-	"github.com/stretchr/testify/assert"
 	"github.com/gorgemul/musicplayer/static"
+	"github.com/stretchr/testify/assert"
 	"image/png"
 	"log"
 	"os"
