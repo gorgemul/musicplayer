@@ -51,6 +51,7 @@ func getAudio(path string) audio {
 	f, err := os.Open(path)
 	assertNoError(err)
 	data, err := io.ReadAll(f)
+	assertNoError(err)
 	album, err := id3parser.Parse(data)
 	assertNoError(err)
 	_, err = f.Seek(0, io.SeekStart)

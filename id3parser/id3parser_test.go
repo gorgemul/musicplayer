@@ -80,11 +80,11 @@ func TestParse(t *testing.T) {
 }
 
 func setupTestParse() {
-	createStream := func(origin_stream []byte, start, end int, segment []byte) []byte {
-		result := make([]byte, len(origin_stream))
-		copy(result[:start], origin_stream[:start])
+	createStream := func(originStream []byte, start, end int, segment []byte) []byte {
+		result := make([]byte, len(originStream))
+		copy(result[:start], originStream[:start])
 		copy(result[start:end], segment)
-		copy(result[end:], origin_stream[end:])
+		copy(result[end:], originStream[end:])
 		return result
 	}
 	invalidIdentifier := []byte{'I', 'D', '2'}                            // should be ID3
