@@ -1,0 +1,6 @@
+- should use wrapper for paused
+  - need to add the stop channel for killing the playerUpdate go routine
+  - then create a new go routine when play
+- when current audio finish, pause the audio
+- refactor the spaghetti field in the audio struct
+- refactor some code if necessary

@@ -18,6 +18,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -28,18 +29,21 @@ type audio struct {
 	format        beep.Format
 	playTime      binding.Float
 	totalPlayTime float64
+	mu            sync.Mutex
+	playerUpdate  bool
+	ticker        *time.Ticker
 }
 
 func main() {
 	app := app.New()
 	window := app.NewWindow("music player")
-	audio := getAudio("./static/no-embeded-album-cover-demo.mp3")
-	playAudio(audio)
+	audio := newAudio("./static/no-embeded-album-cover-demo.mp3")
+	audio.play()
 	window.SetContent(container.NewVBox(
 		layout.NewSpacer(),
-		renderAlbum(audio),
+		renderAlbum(audio.album),
 		layout.NewSpacer(),
-		renderControlWidget(audio),
+		renderControlWidget(&audio),
 		layout.NewSpacer(),
 	))
 	window.ShowAndRun()
@@ -47,7 +51,7 @@ func main() {
 	speaker.Close()
 }
 
-func getAudio(path string) audio {
+func newAudio(path string) audio {
 	f, err := os.Open(path)
 	assertNoError(err)
 	data, err := io.ReadAll(f)
@@ -58,41 +62,46 @@ func getAudio(path string) audio {
 	assertNoError(err)
 	streamer, format, err := mp3.Decode(f)
 	assertNoError(err)
+	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
 	return audio{
-		album,
-		streamer,
-		&beep.Ctrl{Streamer: beep.Loop(-1, streamer), Paused: false},
-		format,
-		binding.NewFloat(),
-		format.SampleRate.D(streamer.Len()).Round(time.Second).Seconds(),
+		album:         album,
+		streamer:      streamer,
+		ctrl:          &beep.Ctrl{Streamer: beep.Loop(-1, streamer), Paused: false},
+		format:        format,
+		playTime:      binding.NewFloat(),
+		totalPlayTime: format.SampleRate.D(streamer.Len()).Round(time.Second).Seconds(),
+		ticker:        time.NewTicker(1 * time.Second),
 	}
 }
 
-func playAudio(audio audio) {
-	speaker.Init(audio.format.SampleRate, audio.format.SampleRate.N(time.Second/10))
-	speaker.Play(beep.Seq(audio.ctrl, beep.Callback(func() {
-		audio.ctrl.Paused = true
-	})))
+func (audio *audio) play() {
+	speaker.Play(audio.ctrl)
 	go func() {
 		for {
+			if audio.ctrl.Paused {
+				continue
+			}
+			<-audio.ticker.C
 			speaker.Lock()
+			audio.mu.Lock()
 			currentPlayTime := audio.format.SampleRate.D(audio.streamer.Position()).Round(time.Second).Seconds()
-			speaker.Unlock()
 			audio.playTime.Set(currentPlayTime)
-			time.Sleep(time.Second)
+			audio.playerUpdate = true
+			speaker.Unlock()
+			audio.mu.Unlock()
 		}
 	}()
 }
 
-func renderAlbum(audio audio) fyne.CanvasObject {
-	image := canvas.NewImageFromImage(audio.album.Cover)
+func renderAlbum(album id3parser.Album) fyne.CanvasObject {
+	image := canvas.NewImageFromImage(album.Cover)
 	image.FillMode = canvas.ImageFillContain
 	image.SetMinSize(fyne.NewSize(800, 600))
-	title := canvas.NewText(audio.album.Title, color.White)
+	title := canvas.NewText(album.Title, color.White)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
 	title.TextSize = 24
-	artist := canvas.NewText(audio.album.Artist, color.White)
+	artist := canvas.NewText(album.Artist, color.White)
 	artist.Alignment = fyne.TextAlignCenter
 	artist.TextSize = 16
 	return container.NewVBox(
@@ -101,7 +110,7 @@ func renderAlbum(audio audio) fyne.CanvasObject {
 	)
 }
 
-func renderControlWidget(audio audio) fyne.CanvasObject {
+func renderControlWidget(audio *audio) fyne.CanvasObject {
 	prevBtn := widget.NewButtonWithIcon("", theme.MediaSkipPreviousIcon(), func() {
 		log.Println("prev")
 	})
@@ -123,6 +132,17 @@ func renderControlWidget(audio audio) fyne.CanvasObject {
 	}
 	audio.playTime.AddListener(binding.NewDataListener(func() {
 		if second, err := audio.playTime.Get(); err == nil {
+			audio.mu.Lock()
+			playerUpdate := audio.playerUpdate
+			audio.playerUpdate = false
+			audio.mu.Unlock()
+			log.Println("playerUpdate", playerUpdate)
+			if !playerUpdate {
+				audio.ticker.Reset(1 * time.Second)
+				speaker.Lock()
+				audio.streamer.Seek(int(second * float64(audio.format.SampleRate)))
+				speaker.Unlock()
+			}
 			formattedPlayTime.Set(formatTime(second))
 		}
 	}))
