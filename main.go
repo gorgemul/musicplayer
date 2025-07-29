@@ -22,28 +22,46 @@ import (
 	"time"
 )
 
-type audio struct {
-	album         id3parser.Album
-	streamer      beep.StreamSeekCloser
-	ctrl          *beep.Ctrl
-	format        beep.Format
-	playTime      binding.Float
-	totalPlayTime float64
-	mu            sync.Mutex
-	playerUpdate  bool
-	ticker        *time.Ticker
+type audioStream struct {
+	streamer beep.StreamSeekCloser
+	ctrl     *beep.Ctrl
+	format   beep.Format
 }
+
+type audioStatus struct {
+	currentTime binding.Float
+	duration    float64
+}
+
+type audioCtrl struct {
+	progressRendererEventLock sync.Mutex
+	progressRendererEvent     bool
+	progressRenderer          *time.Ticker
+	stopProgressRenderer      chan bool
+}
+
+type audio struct {
+	album  id3parser.Album
+	stream audioStream
+	status audioStatus
+	ctrl   audioCtrl
+}
+
+var (
+	prevBtn *widget.Button
+	playBtn *widget.Button
+	nextBtn *widget.Button
+	addBtn  *widget.Button
+)
 
 func main() {
 	app := app.New()
 	window := app.NewWindow("music player")
-	audio := newAudio("./static/no-embeded-album-cover-demo.mp3")
-	audio.play()
+	audio := playAudio("./static/no-embeded-album-cover-demo.mp3")
 	window.SetContent(container.NewVBox(
 		layout.NewSpacer(),
 		renderAlbum(audio.album),
-		layout.NewSpacer(),
-		renderControlWidget(&audio),
+		renderControlWidget(audio),
 		layout.NewSpacer(),
 	))
 	window.ShowAndRun()
@@ -51,7 +69,7 @@ func main() {
 	speaker.Close()
 }
 
-func newAudio(path string) audio {
+func playAudio(path string) *audio {
 	f, err := os.Open(path)
 	assertNoError(err)
 	data, err := io.ReadAll(f)
@@ -62,41 +80,71 @@ func newAudio(path string) audio {
 	assertNoError(err)
 	streamer, format, err := mp3.Decode(f)
 	assertNoError(err)
-	speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
-	return audio{
-		album:         album,
-		streamer:      streamer,
-		ctrl:          &beep.Ctrl{Streamer: beep.Loop(-1, streamer), Paused: false},
-		format:        format,
-		playTime:      binding.NewFloat(),
-		totalPlayTime: format.SampleRate.D(streamer.Len()).Round(time.Second).Seconds(),
-		ticker:        time.NewTicker(1 * time.Second),
-	}
+	err = speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
+	assertNoError(err)
+	ctrl := &beep.Ctrl{Streamer: streamer, Paused: false}
+	var audio audio
+	audio.album = album
+	audio.stream = audioStream{streamer, ctrl, format}
+	audio.status = audioStatus{binding.NewFloat(), format.SampleRate.D(streamer.Len()).Round(time.Second).Seconds()}
+	audio.ctrl = audioCtrl{stopProgressRenderer: make(chan bool)}
+	speaker.Play(beep.Seq(ctrl, beep.Callback(audio.replay)))
+	renderAudioProgress(&audio)
+	return &audio
 }
 
-func (audio *audio) play() {
-	speaker.Play(audio.ctrl)
+func (audio *audio) replay() {
+	// if not use go routine here will cause deadlock, since modify the speaker status inside speaker play method
 	go func() {
+		audio.stream.streamer.Seek(0)
+		audio.stream.ctrl.Paused = true
+		stopRenderAudioProgree(audio)
+		fyne.DoAndWait(func() {
+			playBtn.SetIcon(getPlayBtnIcon(audio.stream.ctrl.Paused))
+			playBtn.Refresh()
+		})
+		speaker.Play(beep.Seq(audio.stream.ctrl, beep.Callback(audio.replay)))
+	}()
+}
+
+func renderAudioProgress(audio *audio) {
+	go func() {
+		audio.ctrl.progressRenderer = time.NewTicker(1 * time.Second)
+		defer func() {
+			audio.ctrl.progressRenderer.Stop()
+			audio.ctrl.progressRenderer = nil
+		}()
 		for {
-			if audio.ctrl.Paused {
-				continue
+			select {
+			case <-audio.ctrl.stopProgressRenderer:
+				return
+			case <-audio.ctrl.progressRenderer.C:
+				speaker.Lock()
+				audio.ctrl.progressRendererEventLock.Lock()
+				currentPlayTime := audio.stream.format.SampleRate.D(audio.stream.streamer.Position()).Round(time.Second).Seconds()
+				audio.status.currentTime.Set(currentPlayTime)
+				audio.ctrl.progressRendererEvent = true
+				speaker.Unlock()
+				audio.ctrl.progressRendererEventLock.Unlock()
 			}
-			<-audio.ticker.C
-			speaker.Lock()
-			audio.mu.Lock()
-			currentPlayTime := audio.format.SampleRate.D(audio.streamer.Position()).Round(time.Second).Seconds()
-			audio.playTime.Set(currentPlayTime)
-			audio.playerUpdate = true
-			speaker.Unlock()
-			audio.mu.Unlock()
 		}
 	}()
+}
+
+func stopRenderAudioProgree(audio *audio) {
+	audio.ctrl.stopProgressRenderer <- true
+	// when paused, if not update currentTime, would cuase next render move the slider 2 seconds
+	speaker.Lock()
+	currentPlayTime := audio.stream.format.SampleRate.D(audio.stream.streamer.Position()).Round(time.Second).Seconds()
+	audio.status.currentTime.Set(currentPlayTime)
+	speaker.Unlock()
 }
 
 func renderAlbum(album id3parser.Album) fyne.CanvasObject {
 	image := canvas.NewImageFromImage(album.Cover)
 	image.FillMode = canvas.ImageFillContain
 	image.SetMinSize(fyne.NewSize(800, 600))
+	// image.SetMinSize(fyne.NewSize(400, 300))
 	title := canvas.NewText(album.Title, color.White)
 	title.TextStyle = fyne.TextStyle{Bold: true}
 	title.Alignment = fyne.TextAlignCenter
@@ -111,48 +159,57 @@ func renderAlbum(album id3parser.Album) fyne.CanvasObject {
 }
 
 func renderControlWidget(audio *audio) fyne.CanvasObject {
-	prevBtn := widget.NewButtonWithIcon("", theme.MediaSkipPreviousIcon(), func() {
+	prevBtn = widget.NewButtonWithIcon("", theme.MediaSkipPreviousIcon(), func() {
 		log.Println("prev")
 	})
-	playBtn := widget.NewButtonWithIcon("", getPlayBtnIcon(audio.ctrl.Paused), nil)
+	playBtn = widget.NewButtonWithIcon("", getPlayBtnIcon(audio.stream.ctrl.Paused), nil)
 	playBtn.OnTapped = func() {
-		audio.ctrl.Paused = !audio.ctrl.Paused
-		playBtn.SetIcon(getPlayBtnIcon(audio.ctrl.Paused))
+		speaker.Lock()
+		audio.stream.ctrl.Paused = !audio.stream.ctrl.Paused
+		speaker.Unlock()
+		if audio.stream.ctrl.Paused {
+			stopRenderAudioProgree(audio)
+		} else {
+			renderAudioProgress(audio)
+		}
+		playBtn.SetIcon(getPlayBtnIcon(audio.stream.ctrl.Paused))
 		playBtn.Refresh()
 	}
-	nextBtn := widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
+	nextBtn = widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
 		log.Println("next")
 	})
-	addBtn := widget.NewButtonWithIcon("", theme.FileIcon(), func() {
+	addBtn = widget.NewButtonWithIcon("", theme.FileIcon(), func() {
 		log.Println("add")
 	})
 	formattedPlayTime := binding.NewString()
-	if second, err := audio.playTime.Get(); err == nil {
+	if second, err := audio.status.currentTime.Get(); err == nil {
 		formattedPlayTime.Set(formatTime(second))
 	}
-	audio.playTime.AddListener(binding.NewDataListener(func() {
-		if second, err := audio.playTime.Get(); err == nil {
-			audio.mu.Lock()
-			playerUpdate := audio.playerUpdate
-			audio.playerUpdate = false
-			audio.mu.Unlock()
-			log.Println("playerUpdate", playerUpdate)
-			if !playerUpdate {
-				audio.ticker.Reset(1 * time.Second)
+	audio.status.currentTime.AddListener(binding.NewDataListener(func() {
+		if second, err := audio.status.currentTime.Get(); err == nil {
+			audio.ctrl.progressRendererEventLock.Lock()
+			progressRendererEvent := audio.ctrl.progressRendererEvent
+			audio.ctrl.progressRendererEvent = false
+			audio.ctrl.progressRendererEventLock.Unlock()
+			if !progressRendererEvent {
+				// when slider is draged, if in the middle of the progress render, would cause the currentTime flashback to previous state
+				if audio.ctrl.progressRenderer != nil {
+					audio.ctrl.progressRenderer.Reset(1 * time.Second)
+				}
 				speaker.Lock()
-				audio.streamer.Seek(int(second * float64(audio.format.SampleRate)))
+				audio.stream.streamer.Seek(int(second * float64(audio.stream.format.SampleRate)))
 				speaker.Unlock()
 			}
 			formattedPlayTime.Set(formatTime(second))
 		}
 	}))
-	slider := widget.NewSliderWithData(0, audio.totalPlayTime, audio.playTime)
-	playTimeLabel := widget.NewLabelWithData(formattedPlayTime)
-	totalTimeLabel := widget.NewLabel(formatTime(audio.totalPlayTime))
+	slider := widget.NewSliderWithData(0, audio.status.duration, audio.status.currentTime)
+	currentTimeLabel := widget.NewLabelWithData(formattedPlayTime)
+	durationLabel := widget.NewLabel(formatTime(audio.status.duration))
 	return container.NewVBox(
 		container.NewHBox(layout.NewSpacer(), prevBtn, playBtn, nextBtn, addBtn, layout.NewSpacer()),
 		layout.NewSpacer(),
-		container.NewBorder(nil, nil, playTimeLabel, totalTimeLabel, slider),
+		container.NewBorder(nil, nil, currentTimeLabel, durationLabel, slider),
 	)
 }
 

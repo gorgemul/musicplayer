@@ -1,3 +1,11 @@
+TODO:
+- support playlist
+  - adding ui(probably left pane)
+  - support select audio
+    - file
+    - directory, match all the audio files in the selected directory
+- support other audio format(but can't parsed the album info), only support audio playing
+DONE:
 - should use wrapper for paused
   - need to add the stop channel for killing the playerUpdate go routine
   - then create a new go routine when play
