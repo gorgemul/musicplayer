@@ -7,6 +7,7 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -47,30 +48,88 @@ type audio struct {
 	ctrl   audioCtrl
 }
 
+type song struct {
+	path string
+	name string
+}
+
 var (
-	prevBtn *widget.Button
-	playBtn *widget.Button
-	nextBtn *widget.Button
-	addBtn  *widget.Button
+	playlist []song
+)
+
+var (
+	list              *widget.List
+	prevBtn           *widget.Button
+	playBtn           *widget.Button
+	nextBtn           *widget.Button
+	importFromFileBtn *widget.Button
+	importFromDirBtn  *widget.Button
 )
 
 func main() {
 	app := app.New()
 	window := app.NewWindow("music player")
 	audio := playAudio("./static/no-embeded-album-cover-demo.mp3")
-	window.SetContent(container.NewVBox(
+	importFromFileBtn = widget.NewButtonWithIcon("file", theme.ContentAddIcon(), func() {
+		dialog := dialog.NewFileOpen(func(file fyne.URIReadCloser, err error) {
+			if err != nil || file == nil {
+				return
+			}
+			defer file.Close()
+			uri := file.URI()
+			playlist = append(playlist, song{path: uri.Path(), name: uri.Name()})
+			list.Refresh()
+		}, window)
+		windowSize := window.Canvas().Size()
+		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
+		dialog.Show()
+	})
+	importFromDirBtn = widget.NewButtonWithIcon("directory", theme.ContentAddIcon(), func() {
+		dialog := dialog.NewFolderOpen(func(files fyne.ListableURI, err error) {
+			if err != nil || files == nil {
+				return
+			}
+			fileList, err := files.List()
+			if err != nil {
+				return
+			}
+			for _, file := range fileList {
+				playlist = append(playlist, song{path: file.Path(), name: file.Name()})
+			}
+			list.Refresh()
+		}, window)
+		windowSize := window.Canvas().Size()
+		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
+		dialog.Show()
+	})
+	list = widget.NewList(
+		func() int {
+			return len(playlist)
+		},
+		func() fyne.CanvasObject {
+			return widget.NewLabel("playlist")
+		},
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			o.(*widget.Label).SetText(playlist[i].name)
+		})
+	right := container.NewVBox(
 		layout.NewSpacer(),
 		renderAlbum(audio.album),
-		renderControlWidget(audio),
 		layout.NewSpacer(),
-	))
+		renderControlWidget(audio),
+	)
+	top := container.NewVBox(container.NewHBox(layout.NewSpacer(), importFromFileBtn, importFromDirBtn, layout.NewSpacer()), widget.NewSeparator())
+	left := container.NewBorder(top, nil, nil, nil, list)
+	split := container.NewHSplit(left, right)
+	split.SetOffset(0.5)
+	window.SetContent(split)
 	window.ShowAndRun()
 	speaker.Clear()
 	speaker.Close()
 }
 
-func playAudio(path string) *audio {
-	f, err := os.Open(path)
+func playAudio(audioPath string) *audio {
+	f, err := os.Open(audioPath)
 	assertNoError(err)
 	data, err := io.ReadAll(f)
 	assertNoError(err)
@@ -178,9 +237,6 @@ func renderControlWidget(audio *audio) fyne.CanvasObject {
 	nextBtn = widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
 		log.Println("next")
 	})
-	addBtn = widget.NewButtonWithIcon("", theme.FileIcon(), func() {
-		log.Println("add")
-	})
 	formattedPlayTime := binding.NewString()
 	if second, err := audio.status.currentTime.Get(); err == nil {
 		formattedPlayTime.Set(formatTime(second))
@@ -207,7 +263,7 @@ func renderControlWidget(audio *audio) fyne.CanvasObject {
 	currentTimeLabel := widget.NewLabelWithData(formattedPlayTime)
 	durationLabel := widget.NewLabel(formatTime(audio.status.duration))
 	return container.NewVBox(
-		container.NewHBox(layout.NewSpacer(), prevBtn, playBtn, nextBtn, addBtn, layout.NewSpacer()),
+		container.NewHBox(layout.NewSpacer(), prevBtn, playBtn, nextBtn, layout.NewSpacer()),
 		layout.NewSpacer(),
 		container.NewBorder(nil, nil, currentTimeLabel, durationLabel, slider),
 	)
