@@ -1,6 +1,9 @@
 TODO:
-- validate import type, only for mp3 right now
+- adding switch song from playlist with prev and next button
+- current playing song highlight, when switch song change the highlight
 - refactor
+  - pull out the renderer part from the player
+  - make palyer a individual package
 - support other audio format(but can't parsed the album info), only support audio playing
 DONE:
 - should use wrapper for paused
@@ -14,3 +17,8 @@ DONE:
   - support select audio
     - file
     - directory, match all the audio files in the selected directory
+- validate import type, only for mp3 right now
+- refactor the audio away as player, has init, play, pause function
+- disable duplicate file name in import file and dir
+- refactor play
+- support playlist change song, also control the button behaviour(disable)

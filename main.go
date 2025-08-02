@@ -8,6 +8,7 @@ import (
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/data/binding"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/driver/desktop"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
@@ -19,116 +20,73 @@ import (
 	"io"
 	"log"
 	"os"
+	"regexp"
+	"slices"
 	"sync"
 	"time"
 )
 
-type audioStream struct {
+type player struct {
+	album    id3parser.Album
 	streamer beep.StreamSeekCloser
 	ctrl     *beep.Ctrl
 	format   beep.Format
+	progress binding.Float 
+	renderer struct {
+		lock   sync.Mutex
+		render bool
+		ticker *time.Ticker
+		stop   chan bool
+	}
 }
 
-type audioStatus struct {
-	currentTime binding.Float
-	duration    float64
-}
-
-type audioCtrl struct {
-	progressRendererEventLock sync.Mutex
-	progressRendererEvent     bool
-	progressRenderer          *time.Ticker
-	stopProgressRenderer      chan bool
+type playlistEntry struct {
+	*widget.Label
+	onDoubleTapped func(audioPath string)
+	audio
 }
 
 type audio struct {
-	album  id3parser.Album
-	stream audioStream
-	status audioStatus
-	ctrl   audioCtrl
-}
-
-type song struct {
 	path string
 	name string
 }
 
-var (
-	playlist []song
-)
+var playlist []audio
 
 var (
+	slider            *widget.Slider
 	list              *widget.List
 	prevBtn           *widget.Button
 	playBtn           *widget.Button
 	nextBtn           *widget.Button
 	importFromFileBtn *widget.Button
 	importFromDirBtn  *widget.Button
+	albumCover        *canvas.Image
+	albumTitle        *canvas.Text
+	albumArtist       *canvas.Text
+	progress          binding.String
+	duration          binding.String
 )
 
 func main() {
 	app := app.New()
 	window := app.NewWindow("music player")
-	audio := playAudio("./static/no-embeded-album-cover-demo.mp3")
-	importFromFileBtn = widget.NewButtonWithIcon("file", theme.ContentAddIcon(), func() {
-		dialog := dialog.NewFileOpen(func(file fyne.URIReadCloser, err error) {
-			if err != nil || file == nil {
-				return
-			}
-			defer file.Close()
-			uri := file.URI()
-			playlist = append(playlist, song{path: uri.Path(), name: uri.Name()})
-			list.Refresh()
-		}, window)
-		windowSize := window.Canvas().Size()
-		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
-		dialog.Show()
-	})
-	importFromDirBtn = widget.NewButtonWithIcon("directory", theme.ContentAddIcon(), func() {
-		dialog := dialog.NewFolderOpen(func(files fyne.ListableURI, err error) {
-			if err != nil || files == nil {
-				return
-			}
-			fileList, err := files.List()
-			if err != nil {
-				return
-			}
-			for _, file := range fileList {
-				playlist = append(playlist, song{path: file.Path(), name: file.Name()})
-			}
-			list.Refresh()
-		}, window)
-		windowSize := window.Canvas().Size()
-		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
-		dialog.Show()
-	})
-	list = widget.NewList(
-		func() int {
-			return len(playlist)
-		},
-		func() fyne.CanvasObject {
-			return widget.NewLabel("playlist")
-		},
-		func(i widget.ListItemID, o fyne.CanvasObject) {
-			o.(*widget.Label).SetText(playlist[i].name)
-		})
-	right := container.NewVBox(
-		layout.NewSpacer(),
-		renderAlbum(audio.album),
-		layout.NewSpacer(),
-		renderControlWidget(audio),
-	)
-	top := container.NewVBox(container.NewHBox(layout.NewSpacer(), importFromFileBtn, importFromDirBtn, layout.NewSpacer()), widget.NewSeparator())
-	left := container.NewBorder(top, nil, nil, nil, list)
-	split := container.NewHSplit(left, right)
-	split.SetOffset(0.5)
-	window.SetContent(split)
+	player := newPlayer()
+	playerWidget := container.NewHBox(widget.NewSeparator(), container.NewVBox(layout.NewSpacer(), initAlbumWidget(), layout.NewSpacer(), initControlWidget(player)))
+	window.SetContent(container.NewBorder(nil, nil, nil, playerWidget, initPlaylistWidget(player, window)))
 	window.ShowAndRun()
 	speaker.Clear()
 	speaker.Close()
 }
 
-func playAudio(audioPath string) *audio {
+func newPlayer() *player {
+	var p player
+	p.progress = binding.NewFloat()
+	p.renderer.stop = make(chan bool)
+	return &p
+}
+
+func (p *player) loadAudio(audioPath string) {
 	f, err := os.Open(audioPath)
 	assertNoError(err)
 	data, err := io.ReadAll(f)
@@ -139,134 +97,266 @@ func playAudio(audioPath string) *audio {
 	assertNoError(err)
 	streamer, format, err := mp3.Decode(f)
 	assertNoError(err)
-	err = speaker.Init(format.SampleRate, format.SampleRate.N(time.Second/10))
-	assertNoError(err)
-	ctrl := &beep.Ctrl{Streamer: streamer, Paused: false}
-	var audio audio
-	audio.album = album
-	audio.stream = audioStream{streamer, ctrl, format}
-	audio.status = audioStatus{binding.NewFloat(), format.SampleRate.D(streamer.Len()).Round(time.Second).Seconds()}
-	audio.ctrl = audioCtrl{stopProgressRenderer: make(chan bool)}
-	speaker.Play(beep.Seq(ctrl, beep.Callback(audio.replay)))
-	renderAudioProgress(&audio)
-	return &audio
+	p.album = album
+	p.streamer = streamer
+	p.format = format
 }
 
-func (audio *audio) replay() {
-	// if not use go routine here will cause deadlock, since modify the speaker status inside speaker play method
-	go func() {
-		audio.stream.streamer.Seek(0)
-		audio.stream.ctrl.Paused = true
-		stopRenderAudioProgree(audio)
-		fyne.DoAndWait(func() {
-			playBtn.SetIcon(getPlayBtnIcon(audio.stream.ctrl.Paused))
-			playBtn.Refresh()
-		})
-		speaker.Play(beep.Seq(audio.stream.ctrl, beep.Callback(audio.replay)))
-	}()
+func (p *player) play(audioPath string) {
+	if !p.hasStream() {
+		p.loadAudio(audioPath)
+		err := speaker.Init(p.format.SampleRate, p.format.SampleRate.N(time.Second/10))
+		assertNoError(err)
+		p.ctrl = &beep.Ctrl{Streamer: p.streamer, Paused: false}
+		playBtn.Enable()
+		slider.Enable()
+	} else {
+		if !p.ctrl.Paused {
+			p.pause()
+		}
+		p.streamer.Close()
+		speaker.Clear()
+		p.loadAudio(audioPath)
+		p.ctrl.Streamer = p.streamer
+	}
+	albumCover.Image, albumTitle.Text, albumArtist.Text = p.album.Cover, p.album.Title, p.album.Artist
+	max := p.format.SampleRate.D(p.streamer.Len()).Round(time.Second).Seconds()
+	slider.Max = max
+	albumCover.Refresh()
+	albumTitle.Refresh()
+	albumArtist.Refresh()
+	p.progress.Set(0)
+	duration.Set(formatTime(max))
+	speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
+	p.resume()
 }
 
-func renderAudioProgress(audio *audio) {
+func (p *player) pause() {
+	p.renderer.stop <- true
+	speaker.Lock()
+	p.ctrl.Paused = true
+	// when paused, if not update progress, would cuase next render move the slider 2 seconds
+	p.progress.Set(p.format.SampleRate.D(p.streamer.Position()).Round(time.Second).Seconds())
+	speaker.Unlock()
+	fyne.Do(func() {
+		playBtn.SetIcon(theme.MediaPlayIcon())
+		playBtn.Refresh()
+	})
+}
+
+func (p *player) resume() {
+	speaker.Lock()
+	p.ctrl.Paused = false
+	speaker.Unlock()
+	fyne.Do(func() {
+		playBtn.SetIcon(theme.MediaPauseIcon())
+		playBtn.Refresh()
+	})
 	go func() {
-		audio.ctrl.progressRenderer = time.NewTicker(1 * time.Second)
+		p.renderer.ticker = time.NewTicker(1 * time.Second)
 		defer func() {
-			audio.ctrl.progressRenderer.Stop()
-			audio.ctrl.progressRenderer = nil
+			p.renderer.ticker.Stop()
+			p.renderer.ticker = nil
 		}()
 		for {
 			select {
-			case <-audio.ctrl.stopProgressRenderer:
+			case <-p.renderer.stop:
 				return
-			case <-audio.ctrl.progressRenderer.C:
+			case <-p.renderer.ticker.C:
 				speaker.Lock()
-				audio.ctrl.progressRendererEventLock.Lock()
-				currentPlayTime := audio.stream.format.SampleRate.D(audio.stream.streamer.Position()).Round(time.Second).Seconds()
-				audio.status.currentTime.Set(currentPlayTime)
-				audio.ctrl.progressRendererEvent = true
+				p.renderer.lock.Lock()
+				currentProgress := p.format.SampleRate.D(p.streamer.Position()).Round(time.Second).Seconds()
+				fyne.Do(func() {
+					p.progress.Set(currentProgress)
+					progress.Set(formatTime(currentProgress))
+				})
+				p.renderer.render = true
 				speaker.Unlock()
-				audio.ctrl.progressRendererEventLock.Unlock()
+				p.renderer.lock.Unlock()
 			}
 		}
 	}()
 }
 
-func stopRenderAudioProgree(audio *audio) {
-	audio.ctrl.stopProgressRenderer <- true
-	// when paused, if not update currentTime, would cuase next render move the slider 2 seconds
-	speaker.Lock()
-	currentPlayTime := audio.stream.format.SampleRate.D(audio.stream.streamer.Position()).Round(time.Second).Seconds()
-	audio.status.currentTime.Set(currentPlayTime)
-	speaker.Unlock()
+func (p *player) replay() {
+	// if not use go routine here will cause deadlock, since modify the speaker status inside speaker play method
+	go func() {
+		p.streamer.Seek(0)
+		p.pause()
+		speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
+	}()
 }
 
-func renderAlbum(album id3parser.Album) fyne.CanvasObject {
-	image := canvas.NewImageFromImage(album.Cover)
-	image.FillMode = canvas.ImageFillContain
-	image.SetMinSize(fyne.NewSize(800, 600))
-	// image.SetMinSize(fyne.NewSize(400, 300))
-	title := canvas.NewText(album.Title, color.White)
-	title.TextStyle = fyne.TextStyle{Bold: true}
-	title.Alignment = fyne.TextAlignCenter
-	title.TextSize = 24
-	artist := canvas.NewText(album.Artist, color.White)
-	artist.Alignment = fyne.TextAlignCenter
-	artist.TextSize = 16
+func (p *player) hasStream() bool {
+	return p.streamer != nil
+}
+
+func newPlaylistEntry(onDoubleTapped func(audioPath string)) *playlistEntry {
+	return &playlistEntry{
+		widget.NewLabel("playlist"),
+		onDoubleTapped,
+		audio{},
+	}
+}
+
+func (pe *playlistEntry) DoubleTapped(*fyne.PointEvent) {
+	if pe.onDoubleTapped != nil {
+		pe.onDoubleTapped(pe.audio.path)
+		pe.Label.Importance = widget.SuccessImportance
+		pe.Label.TextStyle.Bold = true
+		pe.Refresh()
+	}
+}
+
+func (pe *playlistEntry) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
+}
+
+func initAlbumWidget() fyne.CanvasObject {
+	albumCover = canvas.NewImageFromImage(nil)
+	albumCover.FillMode = canvas.ImageFillContain
+	albumCover.SetMinSize(fyne.NewSize(800, 600))
+	albumTitle = canvas.NewText("", color.White)
+	albumTitle.TextStyle = fyne.TextStyle{Bold: true}
+	albumTitle.Alignment = fyne.TextAlignCenter
+	albumTitle.TextSize = 24
+	albumArtist = canvas.NewText("", color.White)
+	albumArtist.Alignment = fyne.TextAlignCenter
+	albumArtist.TextSize = 16
 	return container.NewVBox(
-		image,
-		container.NewHBox(layout.NewSpacer(), container.NewVBox(title, artist), layout.NewSpacer()),
+		albumCover,
+		container.NewHBox(layout.NewSpacer(), container.NewVBox(albumTitle, albumArtist), layout.NewSpacer()),
 	)
 }
 
-func renderControlWidget(audio *audio) fyne.CanvasObject {
+func initControlWidget(p *player) fyne.CanvasObject {
 	prevBtn = widget.NewButtonWithIcon("", theme.MediaSkipPreviousIcon(), func() {
 		log.Println("prev")
 	})
-	playBtn = widget.NewButtonWithIcon("", getPlayBtnIcon(audio.stream.ctrl.Paused), nil)
-	playBtn.OnTapped = func() {
-		speaker.Lock()
-		audio.stream.ctrl.Paused = !audio.stream.ctrl.Paused
-		speaker.Unlock()
-		if audio.stream.ctrl.Paused {
-			stopRenderAudioProgree(audio)
+	playBtn = widget.NewButtonWithIcon("", theme.MediaPauseIcon(), func() {
+		if p.ctrl.Paused {
+			p.resume()
 		} else {
-			renderAudioProgress(audio)
+			p.pause()
 		}
-		playBtn.SetIcon(getPlayBtnIcon(audio.stream.ctrl.Paused))
-		playBtn.Refresh()
-	}
+	})
 	nextBtn = widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
 		log.Println("next")
 	})
-	formattedPlayTime := binding.NewString()
-	if second, err := audio.status.currentTime.Get(); err == nil {
-		formattedPlayTime.Set(formatTime(second))
-	}
-	audio.status.currentTime.AddListener(binding.NewDataListener(func() {
-		if second, err := audio.status.currentTime.Get(); err == nil {
-			audio.ctrl.progressRendererEventLock.Lock()
-			progressRendererEvent := audio.ctrl.progressRendererEvent
-			audio.ctrl.progressRendererEvent = false
-			audio.ctrl.progressRendererEventLock.Unlock()
-			if !progressRendererEvent {
-				// when slider is draged, if in the middle of the progress render, would cause the currentTime flashback to previous state
-				if audio.ctrl.progressRenderer != nil {
-					audio.ctrl.progressRenderer.Reset(1 * time.Second)
+	progress = binding.NewString()
+	duration = binding.NewString()
+	p.progress.AddListener(binding.NewDataListener(func() {
+		if second, err := p.progress.Get(); err == nil {
+			go func(s float64) {
+				p.renderer.lock.Lock()
+				playerRenderEvent := p.renderer.render
+				p.renderer.render = false
+				p.renderer.lock.Unlock()
+				if !playerRenderEvent {
+					// when slider is draged, if in the middle of the progress render, would cause the progress flashback to previous state
+					if p.renderer.ticker != nil {
+						p.renderer.ticker.Reset(1 * time.Second)
+					}
+					if p.hasStream() {
+						speaker.Lock()
+						p.streamer.Seek(int(second * float64(p.format.SampleRate)))
+						speaker.Unlock()
+					}
+					fyne.Do(func() {
+						progress.Set(formatTime(second))
+					})
 				}
-				speaker.Lock()
-				audio.stream.streamer.Seek(int(second * float64(audio.stream.format.SampleRate)))
-				speaker.Unlock()
-			}
-			formattedPlayTime.Set(formatTime(second))
+			}(second)
 		}
 	}))
-	slider := widget.NewSliderWithData(0, audio.status.duration, audio.status.currentTime)
-	currentTimeLabel := widget.NewLabelWithData(formattedPlayTime)
-	durationLabel := widget.NewLabel(formatTime(audio.status.duration))
+	slider = widget.NewSliderWithData(0, 0, p.progress)
+	progressLabel := widget.NewLabelWithData(progress)
+	durationLabel := widget.NewLabelWithData(duration)
+	prevBtn.Disable()
+	playBtn.Disable()
+	nextBtn.Disable()
+	slider.Disable()
 	return container.NewVBox(
 		container.NewHBox(layout.NewSpacer(), prevBtn, playBtn, nextBtn, layout.NewSpacer()),
 		layout.NewSpacer(),
-		container.NewBorder(nil, nil, currentTimeLabel, durationLabel, slider),
+		container.NewBorder(nil, nil, progressLabel, durationLabel, slider),
 	)
+}
+
+func initPlaylistWidget(p *player, window fyne.Window) fyne.CanvasObject {
+	validAudioFormat := regexp.MustCompile(`\.(mp3)$`)
+	importFromFileBtn = widget.NewButtonWithIcon("file", theme.ContentAddIcon(), func() {
+		dialog := dialog.NewFileOpen(func(file fyne.URIReadCloser, err error) {
+			if err != nil || file == nil {
+				log.Println("dialog.NewFolderOpen", err)
+				return
+			}
+			defer file.Close()
+			newAudio := audio{file.URI().Path(), file.URI().Name()}
+			if !validAudioFormat.MatchString(newAudio.name) {
+				dialog.ShowError(fmt.Errorf("only support mp3 format audio"), window)
+				return
+			}
+			if index := slices.IndexFunc(playlist, func(a audio) bool {
+				return a.path == newAudio.path
+			}); index != -1 {
+				dialog.ShowError(fmt.Errorf("%q already exist!", newAudio.name), window)
+				return
+			}
+			playlist = append(playlist, newAudio)
+			list.Refresh()
+		}, window)
+		windowSize := window.Canvas().Size()
+		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
+		dialog.Show()
+	})
+	importFromDirBtn = widget.NewButtonWithIcon("directory", theme.ContentAddIcon(), func() {
+		dialog := dialog.NewFolderOpen(func(files fyne.ListableURI, err error) {
+			if err != nil || files == nil {
+				log.Println("dialog.NewFolderOpen", err)
+				return
+			}
+			fileList, err := files.List()
+			if err != nil {
+				log.Println("dialog.NewFolderOpen", err)
+				return
+			}
+			before := len(playlist)
+			for _, file := range fileList {
+				newAudio := audio{file.Path(), file.Name()}
+				exist := slices.IndexFunc(playlist, func(a audio) bool {
+					return a.path == newAudio.path
+				}) != -1
+				if !exist && validAudioFormat.MatchString(newAudio.name) {
+					playlist = append(playlist, newAudio)
+				}
+			}
+			if len(playlist) == before {
+				dialog.ShowError(fmt.Errorf("No new mp3 file in selected directory"), window)
+			} else {
+				list.Refresh()
+			}
+		}, window)
+		windowSize := window.Canvas().Size()
+		dialog.Resize(fyne.NewSize(windowSize.Width*0.8, windowSize.Height*0.8))
+		dialog.Show()
+	})
+	list = widget.NewList(
+		func() int {
+			return len(playlist)
+		},
+		func() fyne.CanvasObject {
+			return newPlaylistEntry(func(audioPath string) {
+				p.play(audioPath)
+			})
+		},
+		func(i widget.ListItemID, o fyne.CanvasObject) {
+			entry := o.(*playlistEntry)
+			entry.SetText(playlist[i].name)
+			entry.audio = playlist[i]
+		})
+	importBtns := container.NewVBox(container.NewHBox(layout.NewSpacer(), importFromFileBtn, importFromDirBtn, layout.NewSpacer()), widget.NewSeparator())
+	return container.NewBorder(importBtns, nil, nil, nil, list)
 }
 
 func formatTime(floatSeconds float64) string {
@@ -278,13 +368,6 @@ func formatTime(floatSeconds float64) string {
 		return fmt.Sprintf("%02d:%02d:%02d", hour, minute, second)
 	}
 	return fmt.Sprintf("%02d:%02d", minute, second)
-}
-
-func getPlayBtnIcon(paused bool) fyne.Resource {
-	if paused {
-		return theme.MediaPlayIcon()
-	}
-	return theme.MediaPauseIcon()
 }
 
 func assertNoError(err error) {
