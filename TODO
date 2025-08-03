@@ -1,9 +1,11 @@
 TODO:
+- disallow doubleTapped song to play when it's the current playing song
+- add a default cover inside the widget
 - adding switch song from playlist with prev and next button
 - current playing song highlight, when switch song change the highlight
+- when come to invalid format mp3, should give a dialog indicating the invalid format of mp3(wrap the error from parser to the dialog)
+- when song finish, if its the only song then pause, else loop next
 - refactor
-  - pull out the renderer part from the player
-  - make palyer a individual package
 - support other audio format(but can't parsed the album info), only support audio playing
 DONE:
 - should use wrapper for paused
@@ -22,3 +24,6 @@ DONE:
 - disable duplicate file name in import file and dir
 - refactor play
 - support playlist change song, also control the button behaviour(disable)
+- put all the related widgets inside player package
+- make palyer a individual package
+- all struct manage its own ui

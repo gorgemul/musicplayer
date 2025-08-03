@@ -1,4 +1,4 @@
-package id3parser
+package player
 
 import (
 	"bytes"
@@ -25,7 +25,7 @@ type Album struct {
 	Cover  image.Image // if no image found in meta data, use defulat image
 }
 
-func Parse(data []byte) (Album, error) {
+func parse(data []byte) (Album, error) {
 	fileStream = data
 	var (
 		advanceBytes uint32

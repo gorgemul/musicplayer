@@ -1,4 +1,4 @@
-package id3parser
+package player
 
 import (
 	"bytes"
@@ -27,51 +27,51 @@ func TestParse(t *testing.T) {
 	t.Run("invalid identifier", func(t *testing.T) {
 		data, err := os.ReadFile(invalidTagHeaderIdentifierMP3)
 		assert.NoError(t, err)
-		album, err := Parse(data)
+		album, err := parse(data)
 		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderIdentifier.Error())
 	})
 	t.Run("invalid version", func(t *testing.T) {
 		data, err := os.ReadFile(invalidTagHeaderVersionMP3)
 		assert.NoError(t, err)
-		album, err := Parse(data)
+		album, err := parse(data)
 		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderVersion.Error())
 	})
 	t.Run("invalid flags", func(t *testing.T) {
 		data, err := os.ReadFile(invalidTagHeaderFlagsMP3)
 		assert.NoError(t, err)
-		album, err := Parse(data)
+		album, err := parse(data)
 		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderflags.Error())
 	})
 	t.Run("invalid size", func(t *testing.T) {
 		data, err := os.ReadFile(invalidTagHeaderSizeMp3)
 		assert.NoError(t, err)
-		album, err := Parse(data)
+		album, err := parse(data)
 		assert.Equal(t, Album{}, album)
 		assert.EqualError(t, err, ErrInvalidTagHeaderSize.Error())
 	})
 
 	t.Run("get album artist", func(t *testing.T) {
-		album, err := Parse(static.NoCoverMP3Bytes)
+		album, err := parse(static.NoCoverMP3Bytes)
 		assert.Equal(t, ExpectedArtist, album.Artist)
 		assert.NoError(t, err)
 	})
 	t.Run("get album title", func(t *testing.T) {
-		album, err := Parse(static.NoCoverMP3Bytes)
+		album, err := parse(static.NoCoverMP3Bytes)
 		assert.Equal(t, ExpectedTitle, album.Title)
 		assert.NoError(t, err)
 	})
 	t.Run("get embeded cover", func(t *testing.T) {
-		album, err := Parse(static.EmbedCoverMP3Bytes)
+		album, err := parse(static.EmbedCoverMP3Bytes)
 		assert.NoError(t, err)
 		got := &bytes.Buffer{}
 		png.Encode(got, album.Cover)
 		assert.Equal(t, static.TestEmbedCoverBytes, got.Bytes())
 	})
 	t.Run("get default cover", func(t *testing.T) {
-		album, err := Parse(static.NoCoverMP3Bytes)
+		album, err := parse(static.NoCoverMP3Bytes)
 		assert.NoError(t, err)
 		got := &bytes.Buffer{}
 		png.Encode(got, album.Cover)
