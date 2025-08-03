@@ -19,11 +19,17 @@ import (
 )
 
 type Player struct {
-	Album    Album
-	Streamer beep.StreamSeekCloser
-	Ctrl     *beep.Ctrl
-	Format   beep.Format
-	Progress binding.Float
+	album    Album
+	streamer beep.StreamSeekCloser
+	ctrl     *beep.Ctrl
+	format   beep.Format
+	progress binding.Float
+	renderer struct {
+		lock   sync.Mutex
+		render bool
+		ticker *time.Ticker
+		stop   chan bool
+	}
 	UI       struct {
 		AlbumCover    *canvas.Image
 		AlbumTitle    *canvas.Text
@@ -35,32 +41,27 @@ type Player struct {
 		ProgressLabel *widget.Label
 		DurationLabel *widget.Label
 	}
-	Renderer struct {
-		Lock   sync.Mutex
-		Render bool
-		Ticker *time.Ticker
-		Stop   chan bool
-	}
 }
 
 func New() *Player {
 	var p Player
-	p.Progress = binding.NewFloat()
-	p.Progress.AddListener(binding.NewDataListener(func() {
-		if second, err := p.Progress.Get(); err == nil {
+	p.renderer.stop = make(chan bool)
+	p.progress = binding.NewFloat()
+	p.progress.AddListener(binding.NewDataListener(func() {
+		if second, err := p.progress.Get(); err == nil {
 			go func(s float64) {
-				p.Renderer.Lock.Lock()
-				playerRenderEvent := p.Renderer.Render
-				p.Renderer.Render = false
-				p.Renderer.Lock.Unlock()
+				p.renderer.lock.Lock()
+				playerRenderEvent := p.renderer.render
+				p.renderer.render = false
+				p.renderer.lock.Unlock()
 				if !playerRenderEvent {
 					// when slider is draged, if in the middle of the progress render, would cause the progress flashback to previous state
-					if p.Renderer.Ticker != nil {
-						p.Renderer.Ticker.Reset(1 * time.Second)
+					if p.renderer.ticker != nil {
+						p.renderer.ticker.Reset(1 * time.Second)
 					}
-					if p.HasStream() {
+					if p.hasStream() {
 						speaker.Lock()
-						p.Streamer.Seek(int(second * float64(p.Format.SampleRate)))
+						p.streamer.Seek(int(second * float64(p.format.SampleRate)))
 						speaker.Unlock()
 					}
 					fyne.Do(func() {
@@ -71,7 +72,6 @@ func New() *Player {
 			}(second)
 		}
 	}))
-	p.Renderer.Stop = make(chan bool)
 	p.UI.AlbumCover = canvas.NewImageFromImage(nil)
 	p.UI.AlbumCover.FillMode = canvas.ImageFillContain
 	p.UI.AlbumCover.SetMinSize(fyne.NewSize(800, 600))
@@ -86,16 +86,16 @@ func New() *Player {
 		log.Println("prev")
 	})
 	p.UI.PlayBtn = widget.NewButtonWithIcon("", theme.MediaPauseIcon(), func() {
-		if p.Ctrl.Paused {
-			p.Resume()
+		if p.ctrl.Paused {
+			p.resume()
 		} else {
-			p.Pause()
+			p.pause()
 		}
 	})
 	p.UI.NextBtn = widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
 		log.Println("next")
 	})
-	p.UI.Slider = widget.NewSliderWithData(0, 0, p.Progress)
+	p.UI.Slider = widget.NewSliderWithData(0, 0, p.progress)
 	p.UI.ProgressLabel = widget.NewLabel("")
 	p.UI.DurationLabel = widget.NewLabel("")
 	p.UI.PrevBtn.Disable()
@@ -116,49 +116,49 @@ func (p *Player) loadAudio(audioPath string) {
 	assertNoError(err)
 	streamer, format, err := mp3.Decode(f)
 	assertNoError(err)
-	p.Album = album
-	p.Streamer = streamer
-	p.Format = format
+	p.album = album
+	p.streamer = streamer
+	p.format = format
 }
 
-func (p *Player) Play(audioPath string) {
-	if !p.HasStream() {
+func (p *Player) play(audioPath string) {
+	if !p.hasStream() {
 		p.loadAudio(audioPath)
-		err := speaker.Init(p.Format.SampleRate, p.Format.SampleRate.N(time.Second/10))
+		err := speaker.Init(p.format.SampleRate, p.format.SampleRate.N(time.Second/10))
 		assertNoError(err)
-		p.Ctrl = &beep.Ctrl{Streamer: p.Streamer, Paused: false}
+		p.ctrl = &beep.Ctrl{Streamer: p.streamer, Paused: false}
 		p.UI.PlayBtn.Enable()
 		p.UI.Slider.Enable()
 	} else {
-		if !p.Ctrl.Paused {
-			p.Pause()
+		if !p.ctrl.Paused {
+			p.pause()
 		}
-		p.Streamer.Close()
+		p.streamer.Close()
 		speaker.Clear()
 		p.loadAudio(audioPath)
-		p.Ctrl.Streamer = p.Streamer
+		p.ctrl.Streamer = p.streamer
 	}
-	max := p.Format.SampleRate.D(p.Streamer.Len()).Round(time.Second).Seconds()
-	p.UI.AlbumCover.Image = p.Album.Cover
-	p.UI.AlbumTitle.Text = p.Album.Title
-	p.UI.AlbumArtist.Text = p.Album.Artist
+	max := p.format.SampleRate.D(p.streamer.Len()).Round(time.Second).Seconds()
+	p.UI.AlbumCover.Image = p.album.Cover
+	p.UI.AlbumTitle.Text = p.album.Title
+	p.UI.AlbumArtist.Text = p.album.Artist
 	p.UI.Slider.Max = max
 	p.UI.AlbumCover.Refresh()
 	p.UI.AlbumTitle.Refresh()
 	p.UI.AlbumArtist.Refresh()
-	p.Progress.Set(0)
+	p.progress.Set(0)
 	p.UI.DurationLabel.Text = formatTime(max)
 	p.UI.DurationLabel.Refresh()
-	speaker.Play(beep.Seq(p.Ctrl, beep.Callback(p.replay)))
-	p.Resume()
+	speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
+	p.resume()
 }
 
-func (p *Player) Pause() {
-	p.Renderer.Stop <- true
+func (p *Player) pause() {
+	p.renderer.stop <- true
 	speaker.Lock()
-	p.Ctrl.Paused = true
+	p.ctrl.Paused = true
 	// when paused, if not update progress, would cuase next render move the slider 2 seconds
-	p.Progress.Set(p.Format.SampleRate.D(p.Streamer.Position()).Round(time.Second).Seconds())
+	p.progress.Set(p.format.SampleRate.D(p.streamer.Position()).Round(time.Second).Seconds())
 	speaker.Unlock()
 	fyne.Do(func() {
 		p.UI.PlayBtn.SetIcon(theme.MediaPlayIcon())
@@ -166,56 +166,56 @@ func (p *Player) Pause() {
 	})
 }
 
-func (p *Player) Resume() {
+func (p *Player) resume() {
 	speaker.Lock()
-	p.Ctrl.Paused = false
+	p.ctrl.Paused = false
 	speaker.Unlock()
 	fyne.Do(func() {
 		p.UI.PlayBtn.SetIcon(theme.MediaPauseIcon())
 		p.UI.PlayBtn.Refresh()
 	})
 	go func() {
-		p.Renderer.Ticker = time.NewTicker(1 * time.Second)
+		p.renderer.ticker = time.NewTicker(1 * time.Second)
 		defer func() {
-			p.Renderer.Ticker.Stop()
-			p.Renderer.Ticker = nil
+			p.renderer.ticker.Stop()
+			p.renderer.ticker = nil
 		}()
 		for {
 			select {
-			case <-p.Renderer.Stop:
+			case <-p.renderer.stop:
 				return
-			case <-p.Renderer.Ticker.C:
+			case <-p.renderer.ticker.C:
 				speaker.Lock()
-				p.Renderer.Lock.Lock()
-				currentProgress := p.Format.SampleRate.D(p.Streamer.Position()).Round(time.Second).Seconds()
+				p.renderer.lock.Lock()
+				currentProgress := p.format.SampleRate.D(p.streamer.Position()).Round(time.Second).Seconds()
 				fyne.Do(func() {
-					p.Progress.Set(currentProgress)
+					p.progress.Set(currentProgress)
 					p.UI.ProgressLabel.Text = formatTime(currentProgress)
 					p.UI.ProgressLabel.Refresh()
 				})
-				p.Renderer.Render = true
+				p.renderer.render = true
 				speaker.Unlock()
-				p.Renderer.Lock.Unlock()
+				p.renderer.lock.Unlock()
 			}
 		}
 	}()
 }
 
 func (p *Player) replay() {
-	// if not use go routine here will cause deadlock, since modify the speaker status inside speaker play method
+	// if not use go routine will cause deadlock since modify speaker status inside speaker play method
 	go func() {
-		p.Streamer.Seek(0)
-		p.Pause()
+		p.streamer.Seek(0)
+		p.pause()
 		fyne.Do(func() {
 			p.UI.PlayBtn.SetIcon(theme.MediaPlayIcon())
 			p.UI.PlayBtn.Refresh()
 		})
-		speaker.Play(beep.Seq(p.Ctrl, beep.Callback(p.replay)))
+		speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
 	}()
 }
 
-func (p *Player) HasStream() bool {
-	return p.Streamer != nil
+func (p *Player) hasStream() bool {
+	return p.streamer != nil
 }
 
 func assertNoError(err error) {

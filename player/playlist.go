@@ -18,7 +18,7 @@ type song struct {
 }
 
 type Playlist struct {
-	Songs []song
+	songs []song
 	UI    struct {
 		ImportFromFileBtn *widget.Button
 		ImportFromDirBtn  *widget.Button
@@ -26,23 +26,10 @@ type Playlist struct {
 	}
 }
 
-type Entry struct {
+type entry struct {
 	*widget.Label
 	onDoubleTapped func(audioPath string)
 	song
-}
-
-func (e *Entry) DoubleTapped(*fyne.PointEvent) {
-	if e.onDoubleTapped != nil {
-		e.onDoubleTapped(e.song.path)
-		e.Label.Importance = widget.SuccessImportance
-		e.Label.TextStyle.Bold = true
-		e.Refresh()
-	}
-}
-
-func (e *Entry) Cursor() desktop.Cursor {
-	return desktop.PointerCursor
 }
 
 func NewPlaylist(p *Player, window fyne.Window) *Playlist {
@@ -60,13 +47,13 @@ func NewPlaylist(p *Player, window fyne.Window) *Playlist {
 				dialog.ShowError(fmt.Errorf("only support mp3 format audio"), window)
 				return
 			}
-			if index := slices.IndexFunc(pl.Songs, func(s song) bool {
+			if index := slices.IndexFunc(pl.songs, func(s song) bool {
 				return s.path == newSong.path
 			}); index != -1 {
 				dialog.ShowError(fmt.Errorf("%q already exist!", newSong.name), window)
 				return
 			}
-			pl.Songs = append(pl.Songs, newSong)
+			pl.songs = append(pl.songs, newSong)
 			pl.UI.List.Refresh()
 		}, window)
 		windowSize := window.Canvas().Size()
@@ -85,17 +72,17 @@ func NewPlaylist(p *Player, window fyne.Window) *Playlist {
 				log.Println("dialog.NewFolderOpen", err)
 				return
 			}
-			before := len(pl.Songs)
+			before := len(pl.songs)
 			for _, file := range fileList {
 				newSong := song{file.Path(), file.Name()}
-				exist := slices.IndexFunc(pl.Songs, func(s song) bool {
+				exist := slices.IndexFunc(pl.songs, func(s song) bool {
 					return s.path == newSong.path
 				}) != -1
 				if !exist && validSongFormat.MatchString(newSong.name) {
-					pl.Songs = append(pl.Songs, newSong)
+					pl.songs = append(pl.songs, newSong)
 				}
 			}
-			if len(pl.Songs) == before {
+			if len(pl.songs) == before {
 				dialog.ShowError(fmt.Errorf("No new mp3 file in selected directory"), window)
 			} else {
 				pl.UI.List.Refresh()
@@ -107,21 +94,34 @@ func NewPlaylist(p *Player, window fyne.Window) *Playlist {
 	})
 	pl.UI.List = widget.NewList(
 		func() int {
-			return len(pl.Songs)
+			return len(pl.songs)
 		},
 		func() fyne.CanvasObject {
-			return &Entry{
+			return &entry{
 				widget.NewLabel("playlist"),
 				func(audioPath string) {
-					p.Play(audioPath)
+					p.play(audioPath)
 				},
 				song{},
 			}
 		},
 		func(i widget.ListItemID, o fyne.CanvasObject) {
-			e := o.(*Entry)
-			e.SetText(pl.Songs[i].name)
-			e.song = pl.Songs[i]
+			e := o.(*entry)
+			e.SetText(pl.songs[i].name)
+			e.song = pl.songs[i]
 		})
 	return &pl
+}
+
+func (e *entry) DoubleTapped(*fyne.PointEvent) {
+	if e.onDoubleTapped != nil {
+		e.onDoubleTapped(e.song.path)
+		e.Label.Importance = widget.SuccessImportance
+		e.Label.TextStyle.Bold = true
+		e.Refresh()
+	}
+}
+
+func (e *entry) Cursor() desktop.Cursor {
+	return desktop.PointerCursor
 }

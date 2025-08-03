@@ -91,17 +91,16 @@ func setupTestParse() {
 	invalidVersion := []byte{0b00000010, 0b00000000}                      // only accept id3v2.3 and id3v2.4
 	invalidFlags := []byte{0b00011111}                                    // %abc00000
 	invalidSize := []byte{0b10000000, 0b10000000, 0b10000000, 0b10000000} // By id2.3 definition, every byte's first bit should always be 0, so the max tag size would be 256mb
-	var err error
-	if err = os.WriteFile(invalidTagHeaderIdentifierMP3, createStream(static.NoCoverMP3Bytes, 0, 3, invalidIdentifier), 0644); err != nil {
+	if err := os.WriteFile(invalidTagHeaderIdentifierMP3, createStream(static.NoCoverMP3Bytes, 0, 3, invalidIdentifier), 0644); err != nil {
 		log.Println(err)
 	}
-	if err = os.WriteFile(invalidTagHeaderVersionMP3, createStream(static.NoCoverMP3Bytes, 3, 5, invalidVersion), 0644); err != nil {
+	if err := os.WriteFile(invalidTagHeaderVersionMP3, createStream(static.NoCoverMP3Bytes, 3, 5, invalidVersion), 0644); err != nil {
 		log.Println(err)
 	}
-	if err = os.WriteFile(invalidTagHeaderFlagsMP3, createStream(static.NoCoverMP3Bytes, 5, 6, invalidFlags), 0644); err != nil {
+	if err := os.WriteFile(invalidTagHeaderFlagsMP3, createStream(static.NoCoverMP3Bytes, 5, 6, invalidFlags), 0644); err != nil {
 		log.Println(err)
 	}
-	if err = os.WriteFile(invalidTagHeaderSizeMp3, createStream(static.NoCoverMP3Bytes, 6, 10, invalidSize), 0644); err != nil {
+	if err := os.WriteFile(invalidTagHeaderSizeMp3, createStream(static.NoCoverMP3Bytes, 6, 10, invalidSize), 0644); err != nil {
 		log.Println(err)
 	}
 }
