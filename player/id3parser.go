@@ -7,10 +7,11 @@ import (
 	"github.com/gorgemul/musicplayer/static"
 	"image"
 	_ "image/png"
+	"io"
 	"log"
+	"os"
+	"regexp"
 )
-
-var fileStream []byte
 
 var (
 	ErrInvalidTagHeaderIdentifier = errors.New("tag header: invalid identifier")
@@ -25,23 +26,22 @@ type Album struct {
 	Cover  image.Image // if no image found in meta data, use defulat image
 }
 
-func parse(data []byte) (Album, error) {
-	fileStream = data
+func parse(fileStream []byte) (Album, error) {
 	var (
 		advanceBytes uint32
 		album        Album
 		err          error
 		stop         bool
 	)
-	if err := checkValidTagHeader(&advanceBytes); err != nil {
+	if err := checkValidTagHeader(fileStream, &advanceBytes); err != nil {
 		return Album{}, err
 	}
 	extendedHeaderExist := (uint8(fileStream[5]) & 0b01000000) > 1
 	if extendedHeaderExist {
-		advanceExtendedHeader(&advanceBytes)
+		advanceExtendedHeader(fileStream, &advanceBytes)
 	}
 	for !stop {
-		advanceFrame(&advanceBytes, &album, &stop)
+		advanceFrame(fileStream, &advanceBytes, &album, &stop)
 	}
 	if album.Cover == nil {
 		album.Cover, _, err = image.Decode(bytes.NewReader(static.DefaultCoverBytes))
@@ -58,7 +58,7 @@ func parse(data []byte) (Album, error) {
 	return album, nil
 }
 
-func checkValidTagHeader(advanceBytes *uint32) error {
+func checkValidTagHeader(fileStream []byte, advanceBytes *uint32) error {
 	if identifier := string(fileStream[:3]); identifier != "ID3" {
 		return ErrInvalidTagHeaderIdentifier
 	}
@@ -81,13 +81,13 @@ func checkValidTagHeader(advanceBytes *uint32) error {
 	return nil
 }
 
-func advanceExtendedHeader(advanceBytes *uint32) {
+func advanceExtendedHeader(fileStream []byte, advanceBytes *uint32) {
 	extendedHeaderSize := binary.BigEndian.Uint32(fileStream[10:14])
 	*advanceBytes += 4
 	*advanceBytes += extendedHeaderSize
 }
 
-func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
+func advanceFrame(fileStream []byte, advanceBytes *uint32, album *Album, stop *bool) {
 	frameID := string(fileStream[*advanceBytes : *advanceBytes+4])
 	if frameID == "\x00\x00\x00\x00" { // indicating that we have looped over all the frames
 		*stop = true
@@ -103,7 +103,7 @@ func advanceFrame(advanceBytes *uint32, album *Album, stop *bool) {
 	case "TPE1":
 		album.Artist = getFrameContent(string(fileStream[*advanceBytes : *advanceBytes+frameSize]))
 	case "APIC":
-		album.Cover = extractCover(*advanceBytes, frameSize)
+		album.Cover = extractCover(fileStream, *advanceBytes, frameSize)
 	}
 	*advanceBytes += frameSize
 }
@@ -119,7 +119,7 @@ Picture type    $xx
 Description     <text string according to encoding> $00 (00)
 Picture data    <binary data>
 */
-func extractCover(advanceBytes, frameSize uint32) image.Image {
+func extractCover(fileStream []byte, advanceBytes, frameSize uint32) image.Image {
 	var (
 		start int = int(advanceBytes)
 		next  int
@@ -140,4 +140,27 @@ func extractCover(advanceBytes, frameSize uint32) image.Image {
 		log.Fatal("invalid binary content in apic:", err)
 	}
 	return image
+}
+
+func isValidAudio(s song) error {
+	accpetFormat := regexp.MustCompile(`\.(mp3|wav)$`)
+	if !accpetFormat.MatchString(s.name) {
+		return errors.New("only support mp3 format audio")
+	}
+	mp3Format := regexp.MustCompile(`\.(mp3)$`)
+	// only validate mp3 format
+	if mp3Format.MatchString(s.name) {
+		f, err := os.Open(s.path)
+		if err != nil {
+			return err
+		}
+		fileStream, err := io.ReadAll(f)
+		if err != nil {
+			return err
+		}
+		if _, err := parse(fileStream); err != nil {
+			return err
+		}
+	}
+	return nil
 }

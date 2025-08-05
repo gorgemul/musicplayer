@@ -18,7 +18,7 @@ type Playlist struct {
 		ImportFromFileBtn *widget.Button
 		ImportFromDirBtn  *widget.Button
 		List              *widget.List
-		entries           []entry        // since can't get data from *widget.List, need to use another list to keep track of current 	
+		entries           []entry // since can't get data from *widget.List, need to use another list to keep track of current
 	}
 }
 
@@ -31,8 +31,6 @@ type entry struct {
 
 func (e *entry) DoubleTapped(*fyne.PointEvent) {
 	e.onDoubleTapped(e.song.path)
-	e.Label.Importance = widget.SuccessImportance
-	e.Refresh()
 }
 
 func (e *entry) Cursor() desktop.Cursor {

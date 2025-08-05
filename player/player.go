@@ -6,12 +6,13 @@ import (
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/data/binding"
+	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
-	"fyne.io/fyne/v2/dialog"
 	"github.com/gopxl/beep"
 	"github.com/gopxl/beep/mp3"
 	"github.com/gopxl/beep/speaker"
+	"github.com/gopxl/beep/wav"
 	"github.com/gorgemul/musicplayer/static"
 	"image"
 	"image/color"
@@ -19,10 +20,10 @@ import (
 	"io"
 	"log"
 	"os"
-	"sync"
-	"time"
 	"regexp"
 	"slices"
+	"sync"
+	"time"
 )
 
 type Player struct {
@@ -48,9 +49,10 @@ type Player struct {
 		ProgressLabel *widget.Label
 		DurationLabel *widget.Label
 	}
+	*Playlist
 }
 
-func New(window fyne.Window) (*Player, *Playlist) {
+func New(window fyne.Window) *Player {
 	var p Player
 	var pl Playlist
 	p.renderer.stop = make(chan bool)
@@ -86,8 +88,7 @@ func New(window fyne.Window) (*Player, *Playlist) {
 		p.UI.AlbumCover = canvas.NewImageFromImage(nil)
 	}
 	p.UI.AlbumCover.FillMode = canvas.ImageFillContain
-	// p.UI.AlbumCover.SetMinSize(fyne.NewSize(800, 600))
-	p.UI.AlbumCover.SetMinSize(fyne.NewSize(400, 300))
+	p.UI.AlbumCover.SetMinSize(fyne.NewSize(800, 600))
 	p.UI.AlbumTitle = canvas.NewText("No Title", color.White)
 	p.UI.AlbumTitle.TextStyle = fyne.TextStyle{Bold: true}
 	p.UI.AlbumTitle.Alignment = fyne.TextAlignCenter
@@ -99,32 +100,12 @@ func New(window fyne.Window) (*Player, *Playlist) {
 		pl.UI.entries[pl.playingIndex].Label.Importance = widget.MediumImportance
 		pl.UI.entries[pl.playingIndex].Label.Refresh()
 		pl.playingIndex--
-		pl.UI.entries[pl.playingIndex].Label.Importance = widget.SuccessImportance
-		pl.UI.entries[pl.playingIndex].Label.Refresh()
-		if pl.playingIndex == 0 {
-			p.UI.PrevBtn.Disable()
-			p.UI.PrevBtn.Refresh()
-		}
-		if p.UI.NextBtn.Disabled() {
-			p.UI.NextBtn.Enable()
-			p.UI.NextBtn.Refresh()
-		}
 		p.play(pl.songs[pl.playingIndex].path)
 	})
 	p.UI.NextBtn = widget.NewButtonWithIcon("", theme.MediaSkipNextIcon(), func() {
 		pl.UI.entries[pl.playingIndex].Label.Importance = widget.MediumImportance
 		pl.UI.entries[pl.playingIndex].Label.Refresh()
 		pl.playingIndex++
-		pl.UI.entries[pl.playingIndex].Label.Importance = widget.SuccessImportance
-		pl.UI.entries[pl.playingIndex].Label.Refresh()
-		if pl.playingIndex == len(pl.songs) - 1 {
-			p.UI.NextBtn.Disable()
-			p.UI.NextBtn.Refresh()
-		}
-		if p.UI.PrevBtn.Disabled() {
-			p.UI.PrevBtn.Enable()
-			p.UI.PrevBtn.Refresh()
-		}
 		p.play(pl.songs[pl.playingIndex].path)
 	})
 	p.UI.PlayBtn = widget.NewButtonWithIcon("", theme.MediaPauseIcon(), func() {
@@ -143,7 +124,6 @@ func New(window fyne.Window) (*Player, *Playlist) {
 	p.UI.Slider.Disable()
 	pl.playingIndex = -1
 	pl.UI.ImportFromFileBtn = widget.NewButtonWithIcon("file", theme.ContentAddIcon(), func() {
-		validSongFormat := regexp.MustCompile(`\.(mp3)$`)
 		dialog := dialog.NewFileOpen(func(file fyne.URIReadCloser, err error) {
 			if err != nil || file == nil {
 				log.Println("dialog.NewFolderOpen", err)
@@ -151,8 +131,8 @@ func New(window fyne.Window) (*Player, *Playlist) {
 			}
 			defer file.Close()
 			newSong := song{file.URI().Path(), file.URI().Name()}
-			if !validSongFormat.MatchString(newSong.name) {
-				dialog.ShowError(fmt.Errorf("only support mp3 format audio"), window)
+			if err := isValidAudio(newSong); err != nil {
+				dialog.ShowError(err, window)
 				return
 			}
 			if index := slices.IndexFunc(pl.songs, func(s song) bool {
@@ -169,7 +149,6 @@ func New(window fyne.Window) (*Player, *Playlist) {
 		dialog.Show()
 	})
 	pl.UI.ImportFromDirBtn = widget.NewButtonWithIcon("directory", theme.ContentAddIcon(), func() {
-		validSongFormat := regexp.MustCompile(`\.(mp3)$`)
 		dialog := dialog.NewFolderOpen(func(files fyne.ListableURI, err error) {
 			if err != nil || files == nil {
 				log.Println("dialog.NewFolderOpen", err)
@@ -186,7 +165,7 @@ func New(window fyne.Window) (*Player, *Playlist) {
 				exist := slices.IndexFunc(pl.songs, func(s song) bool {
 					return s.path == newSong.path
 				}) != -1
-				if !exist && validSongFormat.MatchString(newSong.name) {
+				if !exist && isValidAudio(newSong) == nil {
 					pl.songs = append(pl.songs, newSong)
 				}
 			}
@@ -217,18 +196,6 @@ func New(window fyne.Window) (*Player, *Playlist) {
 					pl.UI.entries[pl.playingIndex].Refresh()
 				}
 				pl.playingIndex = e.index
-				if pl.playingIndex == 0 {
-					p.UI.PrevBtn.Disable()
-				} else {
-					p.UI.PrevBtn.Enable()
-				}
-				if pl.playingIndex == len(pl.songs) - 1 {
-					p.UI.NextBtn.Disable()
-				} else {
-					p.UI.NextBtn.Enable()
-				}
-				p.UI.PrevBtn.Refresh()
-				p.UI.NextBtn.Refresh()
 				p.play(audioPath)
 			}
 			return &e
@@ -240,19 +207,35 @@ func New(window fyne.Window) (*Player, *Playlist) {
 			e.index = i
 			pl.UI.entries = append(pl.UI.entries, *e)
 		})
-	return &p, &pl
+	p.Playlist = &pl
+	return &p
 }
 
 func (p *Player) loadAudio(audioPath string) {
+	var (
+		album    Album
+		err      error
+		streamer beep.StreamSeekCloser
+		format   beep.Format
+	)
+	mp3Format := regexp.MustCompile(`\.(mp3)$`)
 	f, err := os.Open(audioPath)
-	assertNoError(err)
-	data, err := io.ReadAll(f)
-	assertNoError(err)
-	album, err := parse(data)
-	assertNoError(err)
-	_, err = f.Seek(0, io.SeekStart)
-	assertNoError(err)
-	streamer, format, err := mp3.Decode(f)
+	if mp3Format.MatchString(audioPath) {
+		assertNoError(err)
+		data, err := io.ReadAll(f)
+		assertNoError(err)
+		album, err = parse(data) // only support mp3 format to album info
+		assertNoError(err)
+		_, err = f.Seek(0, io.SeekStart)
+		assertNoError(err)
+		streamer, format, err = mp3.Decode(f)
+	} else {
+		album.Cover, _, err = image.Decode(bytes.NewReader(static.DefaultCoverBytes))
+		assertNoError(err)
+		album.Artist = "Unknown Artist"
+		album.Title = "Unknown Title"
+		streamer, format, err = wav.Decode(f)
+	}
 	assertNoError(err)
 	p.album = album
 	p.streamer = streamer
@@ -265,8 +248,10 @@ func (p *Player) play(audioPath string) {
 		err := speaker.Init(p.format.SampleRate, p.format.SampleRate.N(time.Second/10))
 		assertNoError(err)
 		p.ctrl = &beep.Ctrl{Streamer: p.streamer, Paused: false}
-		p.UI.PlayBtn.Enable()
-		p.UI.Slider.Enable()
+		fyne.Do(func() {
+			p.UI.PlayBtn.Enable()
+			p.UI.Slider.Enable()
+		})
 	} else {
 		if !p.ctrl.Paused {
 			p.pause()
@@ -277,16 +262,32 @@ func (p *Player) play(audioPath string) {
 		p.ctrl.Streamer = p.streamer
 	}
 	max := p.format.SampleRate.D(p.streamer.Len()).Round(time.Second).Seconds()
-	p.UI.AlbumCover.Image = p.album.Cover
-	p.UI.AlbumTitle.Text = p.album.Title
-	p.UI.AlbumArtist.Text = p.album.Artist
-	p.UI.Slider.Max = max
-	p.UI.AlbumCover.Refresh()
-	p.UI.AlbumTitle.Refresh()
-	p.UI.AlbumArtist.Refresh()
-	p.progress.Set(0)
-	p.UI.DurationLabel.Text = formatTime(max)
-	p.UI.DurationLabel.Refresh()
+	fyne.Do(func() {
+		p.UI.AlbumCover.Image = p.album.Cover
+		p.UI.AlbumTitle.Text = p.album.Title
+		p.UI.AlbumArtist.Text = p.album.Artist
+		p.UI.Slider.Max = max
+		p.UI.AlbumCover.Refresh()
+		p.UI.AlbumTitle.Refresh()
+		p.UI.AlbumArtist.Refresh()
+		p.progress.Set(0)
+		p.UI.DurationLabel.Text = formatTime(max)
+		p.UI.DurationLabel.Refresh()
+		p.Playlist.UI.entries[p.Playlist.playingIndex].Importance = widget.HighImportance
+		p.Playlist.UI.entries[p.Playlist.playingIndex].Refresh()
+		if p.Playlist.playingIndex == 0 {
+			p.UI.PrevBtn.Disable()
+		} else {
+			p.UI.PrevBtn.Enable()
+		}
+		if p.Playlist.playingIndex == len(p.Playlist.songs)-1 {
+			p.UI.NextBtn.Disable()
+		} else {
+			p.UI.NextBtn.Enable()
+		}
+		p.UI.PrevBtn.Refresh()
+		p.UI.NextBtn.Refresh()
+	})
 	speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
 	p.resume()
 }
@@ -340,16 +341,26 @@ func (p *Player) resume() {
 }
 
 func (p *Player) replay() {
-	// if not use go routine will cause deadlock since modify speaker status inside speaker play method
-	go func() {
-		p.streamer.Seek(0)
-		p.pause()
-		fyne.Do(func() {
-			p.UI.PlayBtn.SetIcon(theme.MediaPlayIcon())
-			p.UI.PlayBtn.Refresh()
-		})
-		speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
-	}()
+	if len(p.Playlist.songs) == 1 {
+		// if not use go routine will cause deadlock since modify speaker status inside speaker play method
+		go func() {
+			p.streamer.Seek(0)
+			p.pause()
+			fyne.Do(func() {
+				p.UI.PlayBtn.SetIcon(theme.MediaPlayIcon())
+				p.UI.PlayBtn.Refresh()
+			})
+			speaker.Play(beep.Seq(p.ctrl, beep.Callback(p.replay)))
+		}()
+	} else {
+		go func() {
+			p.Playlist.UI.entries[p.Playlist.playingIndex].Importance = widget.MediumImportance
+			p.Playlist.UI.entries[p.Playlist.playingIndex].Refresh()
+			p.Playlist.playingIndex++
+			p.Playlist.playingIndex %= len(p.Playlist.songs)
+			p.play(p.Playlist.songs[p.Playlist.playingIndex].path)
+		}()
+	}
 }
 
 func (p *Player) hasStream() bool {

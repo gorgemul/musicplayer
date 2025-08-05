@@ -1,8 +1,3 @@
-TODO:
-- refactor
-- when come to invalid format mp3, should give a dialog indicating the invalid format of mp3(wrap the error from parser to the dialog)
-- when song finish, if its the only song then pause, else loop next
-- support other audio format(but can't parsed the album info), only support audio playing
 DONE:
 - should use wrapper for paused
   - need to add the stop channel for killing the playerUpdate go routine
@@ -27,3 +22,8 @@ DONE:
 - current playing song highlight, when switch song change the highlight
 - will not play the song when it's the current playing song
 - adding switch song from playlist with prev and next button
+- when come to invalid format mp3, should give a dialog indicating the invalid format of mp3(wrap the error from parser to the dialog)
+- put playlist inside player
+- when song finish, if its the only song then pause, else loop next
+- play should control the button behaviour
+- support other audio format(but can't parsed the album info), only support audio playing

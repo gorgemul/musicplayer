@@ -13,8 +13,8 @@ import (
 func main() {
 	app := app.New()
 	window := app.NewWindow("music player")
-	p, pl := player.New(window)
-	window.SetContent(container.NewBorder(nil, nil, nil, renderPlayer(p), renderPlaylist(pl)))
+	p := player.New(window)
+	window.SetContent(container.NewBorder(nil, nil, nil, renderPlayer(p), renderPlaylist(p.Playlist)))
 	window.ShowAndRun()
 	speaker.Clear()
 	speaker.Close()
